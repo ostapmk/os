@@ -204,7 +204,7 @@ auto Session::_submit(const size_t index) -> Result<typename Op::value_type>
         /// Notify io_context from child
         _context.notify_fork(boost::asio::io_context::fork_child);
         /// Close reading end of pipe
-        // std::move(*pipe).source().close();
+        std::move(*pipe).source().close();
         /// Compute function
         const auto result = (*F)(index);
         /// Serialize result
@@ -228,7 +228,7 @@ auto Session::_submit(const size_t index) -> Result<typename Op::value_type>
     /// Notify io_context from parent
     _context.notify_fork(boost::asio::io_context::fork_parent);
     /// Close writing part of a pipe
-    // std::move(*pipe).sink().close();
+    std::move(*pipe).sink().close();
     /// Promise to store value from async operation
     std::promise<std::optional<typename Op::value_type>> promise;
     /// Future function's result
