@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <unistd.h>
+#include <wait.h>
 
 namespace lab1 {
 
@@ -33,8 +34,10 @@ private:
     class Result
     {
     public:
+        using future_type = std::shared_future<std::optional<T>>;
+
         Result(const pid_t pid, 
-               std::future<std::optional<T>> future,
+               future_type future,
                std::shared_ptr<boost::process::async_pipe> pipe) noexcept :
             _pid{pid},
             _future{std::move(future)},
@@ -43,7 +46,14 @@ private:
 
         ~Result() noexcept
         {
-            stop();
+            /// Terminate child process
+            ::kill(_pid, SIGKILL);
+            /// Collect its status code to omit orphans
+            int status;
+            ::waitpid(_pid, &status, 0);
+            /// Close pipe
+            boost::system::error_code ec;
+            _pipe->close(ec);
         }
 
         [[nodiscard]]
@@ -52,17 +62,9 @@ private:
             return _future;
         }
     
-        void stop() noexcept
-        {
-            /// Terminate child process
-            ::kill(_pid, SIGKILL);
-            /// Close pipe
-            _pipe.reset();
-        }
-
     private:
         const pid_t _pid;
-        std::future<std::optional<T>> _future;
+        future_type _future;
         std::shared_ptr<boost::process::async_pipe> _pipe;
     };
 

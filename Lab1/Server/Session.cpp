@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <boost/asio/buffer.hpp>
+#include <boost/asio/deadline_timer.hpp>
 #include <boost/asio/read.hpp>
 #include <boost/asio/read_until.hpp>
 #include <boost/asio/spawn.hpp>
@@ -74,6 +75,24 @@ namespace {
 
     constexpr std::string_view kUsage = 
         "Copyright (c) 2020 Ostap Mykytiuk\n"
+        "\n"
+        "SYNOPSIS\n"
+        "    Provide operation and index to retrieve predefined functions attributes.\n"
+        "    Apply operation to functions result.\n"
+        "\n"
+        "OPERATIONS\n"
+        "    OR\n"
+        "        - logical 'OR' of operands\n"
+        "    AND\n"
+        "        - logical 'AND' of operands\n"
+        "    MUL\n"
+        "        - multiply operands\n"
+        "\n"
+        "INDEX RANGE\n"
+        "    [0 - 5]\n"
+        "\n"
+        "EXAMPLE\n"
+        "   OR 0\n"
         "\n"
         "\n";
 
@@ -147,44 +166,45 @@ void Session::start()
 
                 /// Split into separate variables
                 const auto [operation, index] = *line;
-
-                /// Validate index
-                const bool out_of_index = std::visit(
-                    [this, index = index] (auto operation) {
-                        return index >= decltype(operation)::kSize;
-                    },
-                    operation
-                );
-
-                if (out_of_index) {
-                    boost::asio::async_write(
-                        _socket,
-                        boost::asio::buffer(kOutOfRange),
-                        yield[ec]
-                    );
-
-                    /// Try again
-                    continue;
-                }
-
-                std::visit(
+                const auto error = std::visit(
                     [&, this, index = index] (const auto operation) {
                         using Op = std::remove_const_t<decltype(operation)>;
+
+                        /// Check whether index fit into bounds
+                        if (index >= Op::kSize) {
+                            boost::asio::async_write(
+                                _socket,
+                                boost::asio::buffer(kOutOfRange),
+                                yield[ec]
+                            );
+
+                            return false;
+                        }
+
                         /// Submit functions to execution
                         auto f = _submit<Op, spos::lab1::demo::f_func<Op::kNativeOperation>>(index);
                         auto g = _submit<Op, spos::lab1::demo::g_func<Op::kNativeOperation>>(index);
-
-                        /// TODO: these fuckers should be checked for short circuit
-                        const auto result = Op::compute(f.future().get().value(), g.future().get().value());
-                        const auto serialized = Op::serialize(result);
+                        
+                        /// TODO
+                        /// Timer to periodically check for completion
+                        // boost::asio::deadline_timer timer{_context};
+                        // const auto result = Op::compute(f.future().get().value(), g.future().get().value());
+                        // const auto serialized = Op::serialize(result);
                         boost::asio::async_write(
                             _socket,
-                            boost::asio::buffer(serialized),
+                            boost::asio::buffer("Implement me"),
                             yield[ec]
                         );
+
+                        return true;
                     },
                     operation
                 );
+
+                if (error) {
+                    /// Continue on error
+                    continue;
+                }
             }
         }
     );
@@ -203,7 +223,7 @@ auto Session::_submit(const size_t index) -> Result<typename Op::value_type>
     if (pid == 0) {
         /// Notify io_context from child
         _context.notify_fork(boost::asio::io_context::fork_child);
-        /// Close reading end of pipe
+        /// Close reading end of a pipe
         std::move(*pipe).source().close();
         /// Compute function
         const auto result = (*F)(index);
@@ -234,16 +254,16 @@ auto Session::_submit(const size_t index) -> Result<typename Op::value_type>
     /// Future function's result
     auto future = promise.get_future();
     /// Read result from a pipe
-    auto result = std::make_shared<std::string>();
+    auto buffer = std::make_shared<std::string>();
     boost::asio::async_read(
         *pipe, 
-        boost::asio::dynamic_buffer(*result),
-        [promise = std::move(promise), pipe, result] (const auto ec, const auto) mutable {
+        boost::asio::dynamic_buffer(*buffer),
+        [promise = std::move(promise), pipe, buffer] (const auto ec, const auto) mutable {
             if (ec) {
                 return promise.set_value({});
             }
 
-            auto deserialized = Op::deserialize(*result);
+            auto deserialized = Op::deserialize(*buffer);
             if (!deserialized) {
                 return promise.set_value({});
             }
