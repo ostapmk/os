@@ -30,7 +30,7 @@ $ make -j
 #### Check available options
 
 ```bash
-$ lab1 --help
+$ ./lab1 --help
 ```
 
 #### Launch

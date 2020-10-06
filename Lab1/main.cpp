@@ -6,9 +6,9 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/address.hpp>
 #include <boost/asio/signal_set.hpp>
+#include <csignal>
 #include <exception>
 #include <iostream>
-#include <signal.h>
 
 int main(int argc, char** argv)
 {

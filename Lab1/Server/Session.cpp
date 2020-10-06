@@ -4,8 +4,8 @@
 
 #include <algorithm>
 #include <array>
-#include <boost/asio/buffer.hpp>
 #include <boost/asio/deadline_timer.hpp>
+#include <boost/asio/buffer.hpp>
 #include <boost/asio/read.hpp>
 #include <boost/asio/read_until.hpp>
 #include <boost/asio/spawn.hpp>
@@ -13,9 +13,8 @@
 #include <boost/system/error_code.hpp>
 #include <cstdlib>
 #include <iostream>
-#include <string_view>
-#include <sys/types.h>
 #include <sysexits.h>
+#include <tuple>
 #include <utility>
 
 namespace lab1 {
@@ -76,7 +75,7 @@ namespace {
     constexpr std::string_view kUsage = 
         "Copyright (c) 2020 Ostap Mykytiuk\n"
         "\n"
-        "SYNOPSIS\n"
+        "DESCRIPTION\n"
         "    Provide operation and index to retrieve predefined functions attributes.\n"
         "    Apply operation to functions result.\n"
         "\n"
@@ -96,9 +95,15 @@ namespace {
         "\n"
         "\n";
 
+    constexpr std::string_view kInput = "input> ";
+
     constexpr std::string_view kInvalidInput = "You have an error in your input, try again!\n";
 
     constexpr std::string_view kOutOfRange = "Provided index is out of allowed range!\n";
+
+    constexpr std::string_view kInternal = "Sorry, can't compute result. Internal error occured.\n";
+
+    constexpr std::string_view kProcessing = "Processing...\n";
 
 } // namespace
 
@@ -128,6 +133,13 @@ void Session::start()
             std::string buffer;
             buffer.reserve(1024);
             while (_socket.is_open()) {
+                /// Gently ask for input
+                boost::asio::async_write(
+                    _socket,
+                    boost::asio::buffer(kInput),
+                    yield[ec]
+                );
+
                 /// Read operation and index
                 /// Allow to read only small chunk of data otherwise
                 /// user is abusing us
@@ -144,21 +156,17 @@ void Session::start()
                 }
 
                 const std::string_view input{buffer.data(), size - 1};
-                if (input.empty()) {
-                    /// It's not an error
-                    continue;
-                }
-
                 const auto line = parse(input);
                 buffer.erase(0, size);
-
                 if (!line) {
-                    /// Send error message
-                    boost::asio::async_write(
-                        _socket,
-                        boost::asio::buffer(kInvalidInput),
-                        yield[ec]
-                    );
+                    if (!input.empty()) {
+                        /// Send error message
+                        boost::asio::async_write(
+                            _socket,
+                            boost::asio::buffer(kInvalidInput),
+                            yield[ec]
+                        );
+                    }
 
                     /// Try again
                     continue;
@@ -166,7 +174,7 @@ void Session::start()
 
                 /// Split into separate variables
                 const auto [operation, index] = *line;
-                const auto error = std::visit(
+                std::visit(
                     [&, this, index = index] (const auto operation) {
                         using Op = std::remove_const_t<decltype(operation)>;
 
@@ -178,33 +186,85 @@ void Session::start()
                                 yield[ec]
                             );
 
-                            return false;
+                            /// Continue looping
+                            return;
                         }
+
+                        /// Notify about started computation
+                        boost::asio::async_write(
+                            _socket,
+                            boost::asio::buffer(kProcessing),
+                            yield[ec]
+                        );
 
                         /// Submit functions to execution
                         auto f = _submit<Op, spos::lab1::demo::f_func<Op::kNativeOperation>>(index);
                         auto g = _submit<Op, spos::lab1::demo::g_func<Op::kNativeOperation>>(index);
-                        
-                        /// TODO
-                        /// Timer to periodically check for completion
-                        // boost::asio::deadline_timer timer{_context};
-                        // const auto result = Op::compute(f.future().get().value(), g.future().get().value());
-                        // const auto serialized = Op::serialize(result);
-                        boost::asio::async_write(
-                            _socket,
-                            boost::asio::buffer("Implement me"),
-                            yield[ec]
-                        );
 
-                        return true;
+                        /// Timer to periodically check for completion
+                        boost::asio::deadline_timer timer{_context};
+                        while (_socket.is_open()) {
+                            const auto ready = [&] (auto& result) {
+                                return result.future().wait_for(std::chrono::seconds{0}) == std::future_status::ready;
+                            };
+
+                            /// Check for short circuit or an error
+                            const bool finished = std::apply(
+                                [&] (auto&... fs) {
+                                    return (
+                                        [&, this] (auto& f) {
+                                            if (!ready(f)) {
+                                                return false;
+                                            }
+                                            
+                                            const auto& value = f.future().get();
+                                            if (!value) {
+                                                boost::asio::async_write(
+                                                    _socket,
+                                                    boost::asio::buffer(kInternal),
+                                                    yield[ec]
+                                                );
+                                                return true;
+                                            }
+                
+                                            if (Op::check_short_circuit(*value)) {
+                                                const auto serialized = Op::serialize(*value);
+                                                const std::array result{boost::asio::buffer("Short circuit: "), boost::asio::buffer(serialized), boost::asio::buffer("\n")};
+                                                boost::asio::async_write(_socket, result, yield[ec]);
+                                                return true;
+                                            }
+
+                                            return false;
+                                        }(fs)
+                                        || ...
+                                    );
+                                },
+                                std::tie(f, g)
+                            );
+
+                            if (finished) {
+                                /// We are finished with computing
+                                return;
+                            }
+
+                            if (ready(f) && ready(g)) {
+                                const auto serialized = Op::serialize(Op::compute(*f.future().get(), *g.future().get()));
+                                const std::array result{boost::asio::buffer("Result: "), boost::asio::buffer(serialized), boost::asio::buffer("\n")};
+                                boost::asio::async_write(
+                                    _socket,
+                                    result,
+                                    yield[ec]
+                                );
+                                return;
+                            }
+
+                            /// Wait to check value presence again
+                            timer.expires_from_now(boost::posix_time::milliseconds{1});
+                            timer.async_wait(yield[ec]);
+                        }
                     },
                     operation
                 );
-
-                if (error) {
-                    /// Continue on error
-                    continue;
-                }
             }
         }
     );
@@ -259,7 +319,7 @@ auto Session::_submit(const size_t index) -> Result<typename Op::value_type>
         *pipe, 
         boost::asio::dynamic_buffer(*buffer),
         [promise = std::move(promise), pipe, buffer] (const auto ec, const auto) mutable {
-            if (ec) {
+            if (ec != boost::asio::error::eof) {
                 return promise.set_value({});
             }
 

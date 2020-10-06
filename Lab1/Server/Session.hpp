@@ -63,7 +63,7 @@ private:
         }
     
     private:
-        const pid_t _pid;
+        pid_t _pid;
         future_type _future;
         std::shared_ptr<boost::process::async_pipe> _pipe;
     };
