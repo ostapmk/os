@@ -228,7 +228,7 @@ void Session::start()
                                             }
                 
                                             if (Op::check_short_circuit(*value)) {
-                                                const auto serialized = Op::serialize(*value);
+                                                const auto serialized = Op::serialize(Op::kShortCircuitResult);
                                                 const std::array result{boost::asio::buffer("Short circuit: "), boost::asio::buffer(serialized), boost::asio::buffer("\n")};
                                                 boost::asio::async_write(_socket, result, yield[ec]);
                                                 return true;
