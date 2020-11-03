@@ -4,11 +4,11 @@
 
 #include <algorithm>
 #include <array>
-#include <boost/asio/deadline_timer.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/read.hpp>
 #include <boost/asio/read_until.hpp>
 #include <boost/asio/spawn.hpp>
+#include <boost/asio/system_timer.hpp>
 #include <boost/asio/write.hpp>
 #include <boost/system/error_code.hpp>
 #include <cstdlib>
@@ -78,6 +78,7 @@ namespace {
         "DESCRIPTION\n"
         "    Provide operation and index to retrieve predefined functions attributes.\n"
         "    Apply operation to functions result.\n"
+        "    Submit \"q\" for immediate cancelation.\n"
         "\n"
         "OPERATIONS\n"
         "    OR\n"
@@ -102,6 +103,8 @@ namespace {
     constexpr std::string_view kOutOfRange = "Provided index is out of allowed range!\n";
 
     constexpr std::string_view kInternal = "Sorry, can't compute result. Internal error occured.\n";
+
+    constexpr std::string_view kCanceled = "Computation canceled!\n";
 
     constexpr std::string_view kProcessing = "Processing...\n";
 
@@ -151,7 +154,6 @@ void Session::start()
                 );
 
                 if (ec) {
-                    /// Connection aborted
                     return;
                 }
 
@@ -202,9 +204,9 @@ void Session::start()
                         auto g = _submit<Op, spos::lab1::demo::g_func<Op::kNativeOperation>>(index);
 
                         /// Timer to periodically check for completion
-                        boost::asio::deadline_timer timer{_context};
+                        boost::asio::system_timer timer{_context};
                         while (_socket.is_open()) {
-                            const auto ready = [&] (auto& result) {
+                            const auto ready = [&] (const auto& result) {
                                 return result.future().wait_for(std::chrono::seconds{0}) == std::future_status::ready;
                             };
 
@@ -216,7 +218,7 @@ void Session::start()
                                             if (!ready(f)) {
                                                 return false;
                                             }
-                                            
+
                                             const auto& value = f.future().get();
                                             if (!value) {
                                                 boost::asio::async_write(
@@ -226,7 +228,7 @@ void Session::start()
                                                 );
                                                 return true;
                                             }
-                
+
                                             if (Op::check_short_circuit(*value)) {
                                                 const auto serialized = Op::serialize(Op::kShortCircuitResult);
                                                 const std::array result{boost::asio::buffer("Short circuit: "), boost::asio::buffer(serialized), boost::asio::buffer("\n")};
@@ -258,8 +260,52 @@ void Session::start()
                                 return;
                             }
 
+                            /// Check how many bytes can we read
+                            if (_socket.available(ec) > 0 && !ec) {
+                                buffer.resize(2);
+                                const auto size = boost::asio::read(
+                                    _socket,
+                                    boost::asio::buffer(buffer, buffer.capacity()), 
+                                    ec
+                                );
+                                if (ec) {
+                                    /// Connection is lost or dumb user is abusing us
+                                    return;
+                                }
+
+                                const bool cancel = (size == 2 && std::string_view{buffer.data(), 2} == "q\n");
+                                buffer.clear();
+                                if (cancel) {
+                                    boost::asio::async_write(
+                                        _socket,
+                                        boost::asio::buffer(kCanceled),
+                                        yield[ec]
+                                    );
+                                    break;
+                                } else {
+                                    /// Some garbage was provided, read all available data
+                                    const auto size = boost::asio::async_read_until(
+                                        _socket,
+                                        boost::asio::dynamic_buffer(buffer, buffer.capacity()),
+                                        '\n',
+                                        yield[ec]
+                                    );
+                                    if (ec) {
+                                        /// Here we go again
+                                        return;
+                                    }
+
+                                    /// Send error message
+                                    boost::asio::async_write(
+                                        _socket,
+                                        boost::asio::buffer(kInvalidInput),
+                                        yield[ec]
+                                    );
+                                }
+                            }
+
                             /// Wait to check value presence again
-                            timer.expires_from_now(boost::posix_time::milliseconds{1});
+                            timer.expires_from_now(std::chrono::milliseconds{1});
                             timer.async_wait(yield[ec]);
                         }
                     },

@@ -61,6 +61,12 @@ private:
         {
             return _future;
         }
+
+        [[nodiscard]]
+        const auto& future() const noexcept
+        {
+            return _future;
+        }
     
     private:
         pid_t _pid;
