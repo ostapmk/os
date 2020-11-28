@@ -11,5 +11,5 @@ public class Process {
     this.cpudone = cpudone;
     this.ionext = ionext;
     this.numblocked = numblocked;
-  } 	
+  }
 }
