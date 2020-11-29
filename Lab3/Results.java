@@ -1,11 +1,5 @@
 public class Results {
-  public String schedulingType;
-  public String schedulingName;
-  public int compuTime;
-
-  public Results (String schedulingType, String schedulingName, int compuTime) {
-    this.schedulingType = schedulingType;
-    this.schedulingName = schedulingName;
-    this.compuTime = compuTime;
-  } 	
+  public String schedulingType = "<unknown>";
+  public String schedulingName = "<unknown>";
+  public int totalTime = 0;
 }

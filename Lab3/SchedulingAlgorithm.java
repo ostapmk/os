@@ -1,76 +1,105 @@
-// Run() is called from Scheduling.main() and is where
+// run() is called from Scheduling.main() and is where
 // the scheduling algorithm written by the user resides.
-// User modification should occur within the Run() function.
+// User modification should occur within the run() function.
 
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
+import java.util.Comparator;
+import java.util.EnumMap;
+import java.util.LinkedList;
+import java.util.PriorityQueue;
+import java.util.Random;
 import java.util.Vector;
+
+final class SuspendedProcess {
+  public final int suspendedUntil;
+  public final Process process;
+
+  public SuspendedProcess(final int suspendedUntil, final Process process) {
+    this.suspendedUntil = suspendedUntil;
+    this.process = process;
+  }
+};
 
 public class SchedulingAlgorithm {
 
-  public static Results run(int runtime, Vector<Process> processVector, Results result) {
-    int i = 0;
-    int comptime = 0;
-    int currentProcess = 0;
-    int previousProcess = 0;
-    int size = processVector.size();
-    int completed = 0;
-    String resultsFile = "Summary-Processes";
+  public static Results run(final int runTime, final Vector<Process> input) {
+    var result = new Results();
+    result.schedulingType = "Preemptive";
+    result.schedulingName = "Multilevel Queue";
 
-    result.schedulingType = "Batch (Non preemptive)";
-    result.schedulingName = "Multiple Queues";
+    final String resultsFile = "Summary-Processes";
 
+    var processes = new LinkedList<Process>();
+    input.forEach((process) -> { processes.add(process); });
+
+    var queues = new EnumMap<Process.Type, PriorityQueue<SuspendedProcess>>(Process.Type.class);
     try (var out = new PrintStream(new FileOutputStream(resultsFile))) {
-      var process = processVector.elementAt(currentProcess);
-      out.println("Process: " + currentProcess + " registered... (" + process.cputime + " " + process.ioblocking + " "
-          + process.cpudone + " " + process.cpudone + ")");
-      while (comptime < runtime) {
-        if (process.cpudone == process.cputime) {
-          completed++;
-          out.println("Process: " + currentProcess + " completed... (" + process.cputime + " " + process.ioblocking
-              + " " + process.cpudone + " " + process.cpudone + ")");
-          if (completed == size) {
-            result.compuTime = comptime;
-            return result;
+      while (!(processes.isEmpty() && queues.isEmpty()) && (result.totalTime < runTime)) {
+        Process process = null;
+        if (!processes.isEmpty()) {
+          process = processes.peek();
+        }
+
+        Process suspended = null;
+        for (var pair : queues.entrySet()) {
+          var current = pair.getValue().peek();
+          if (current.suspendedUntil <= result.totalTime && (suspended == null || current.process.type.getValue() < suspended.type.getValue())) {
+            suspended = current.process;
           }
-          for (i = size - 1; i >= 0; i--) {
-            process = processVector.elementAt(i);
-            if (process.cpudone < process.cputime) {
-              currentProcess = i;
+        }
+
+        if (process != null && suspended != null) {
+          if (suspended.type.getValue() < process.type.getValue()) {
+            process = suspended;
+            queues.get(process.type).remove();
+            if (queues.get(process.type).isEmpty()) {
+              queues.remove(process.type);
             }
+          } else {
+            processes.remove();
           }
-          process = processVector.elementAt(currentProcess);
-          out.println("Process: " + currentProcess + " registered... (" + process.cputime + " " + process.ioblocking
-              + " " + process.cpudone + " " + process.cpudone + ")");
-        }
-        if (process.ioblocking == process.ionext) {
-          out.println("Process: " + currentProcess + " I/O blocked... (" + process.cputime + " " + process.ioblocking
-              + " " + process.cpudone + " " + process.cpudone + ")");
-          process.numblocked++;
-          process.ionext = 0;
-          previousProcess = currentProcess;
-          for (i = size - 1; i >= 0; i--) {
-            process = processVector.elementAt(i);
-            if (process.cpudone < process.cputime && previousProcess != i) {
-              currentProcess = i;
-            }
+        } else if (process != null) {
+          processes.remove();
+        } else if (suspended != null) {
+          process = suspended;
+          queues.get(process.type).remove();
+          if (queues.get(process.type).isEmpty()) {
+            queues.remove(process.type);
           }
-          process = processVector.elementAt(currentProcess);
-          out.println("Process: " + currentProcess + " registered... (" + process.cputime + " " + process.ioblocking
-              + " " + process.cpudone + " " + process.cpudone + ")");
+        } else {
+          ++result.totalTime;
+          continue;
         }
-        process.cpudone++;
-        if (process.ioblocking > 0) {
-          process.ionext++;
+
+        out.printf("Process[%s]: %d registered... (%d, %d, %d)\n", process.type, process.id, process.cpuTime, process.ioBlockIn, process.cpuDone);
+
+        final var step = Math.min(Math.min(process.ioBlockIn, runTime - result.totalTime), process.cpuTime - process.cpuDone);
+        process.cpuDone += step;
+        result.totalTime += step;
+
+        if (process.cpuTime == process.cpuDone) {
+          out.printf("Process[%s]: %d completed... (%d, %d, %d)\n", process.type, process.id, process.cpuTime, process.ioBlockIn, process.cpuDone);
+        } else {
+          ++process.numBlocked;
+          final var blockFor = new Random().nextInt(100);
+
+          out.printf("Process[%s]: %d I/O blocked... (%d, %d, %d, %d)\n", process.type, process.id, process.cpuTime, process.ioBlockIn, process.cpuDone, blockFor);
+
+          if (queues.get(process.type) == null) {
+            Comparator<SuspendedProcess> comp = (lhs, rhs) -> {return  Integer.compare(lhs.suspendedUntil, rhs.suspendedUntil);};
+            queues.put(process.type, new PriorityQueue<>(comp));
+          }
+
+          // Suspend process for some time since operation is blocking
+          queues.get(process.type).add(new SuspendedProcess(blockFor + result.totalTime, process));
         }
-        comptime++;
       }
     } catch (IOException e) {
       /* Handle exceptions */
     }
 
-    result.compuTime = comptime;
     return result;
   }
 }

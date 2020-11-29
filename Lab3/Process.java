@@ -1,15 +1,30 @@
 public class Process {
-  public int cputime;
-  public int ioblocking;
-  public int cpudone;
-  public int ionext;
-  public int numblocked;
+  public final int id;
+  public final int cpuTime;
+  public final int ioBlockIn;
+  public final Type type;
+  public int cpuDone = 0;
+  public int numBlocked = 0;
 
-  public Process(int cputime, int ioblocking, int cpudone, int ionext, int numblocked) {
-    this.cputime = cputime;
-    this.ioblocking = ioblocking;
-    this.cpudone = cpudone;
-    this.ionext = ionext;
-    this.numblocked = numblocked;
+  public enum Type {
+    System(0),
+    Background(1),
+    Foreground(2);
+
+    private final int value;
+    private Type(int value) {
+        this.value = value;
+    }
+
+    public int getValue() {
+        return value;
+    }
+  };
+
+  public Process(int id, int cpuTime, int ioBlockIn, Type type) {
+    this.id = id;
+    this.cpuTime = cpuTime;
+    this.ioBlockIn = ioBlockIn;
+    this.type = type;
   }
 }
