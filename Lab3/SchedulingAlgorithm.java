@@ -36,6 +36,7 @@ public class SchedulingAlgorithm {
 
     var queues = new EnumMap<Process.Type, PriorityQueue<SuspendedProcess>>(Process.Type.class);
     try (var out = new PrintStream(new FileOutputStream(resultsFile))) {
+      // Run until all processes are completed or total time is over run time
       while (!(processes.isEmpty() && queues.isEmpty()) && (result.totalTime < runTime)) {
         Process process = null;
         if (!processes.isEmpty()) {
@@ -51,6 +52,7 @@ public class SchedulingAlgorithm {
         }
 
         if (process != null && suspended != null) {
+          // Check suspended process has higher priority than newcomer
           if (suspended.type.getValue() < process.type.getValue()) {
             process = suspended;
             queues.get(process.type).remove();
@@ -69,6 +71,7 @@ public class SchedulingAlgorithm {
             queues.remove(process.type);
           }
         } else {
+          // We have no processes to run so simply increase total running time
           ++result.totalTime;
           continue;
         }
@@ -83,16 +86,19 @@ public class SchedulingAlgorithm {
           out.printf("Process[%s]: %d completed... (%d, %d, %d)\n", process.type, process.id, process.cpuTime, process.ioBlockIn, process.cpuDone);
         } else {
           ++process.numBlocked;
-          final var blockFor = new Random().nextInt(100);
 
+          // Suspend process for some time since it's performing blocking operation
+          final var blockFor = new Random().nextInt(100);
           out.printf("Process[%s]: %d I/O blocked... (%d, %d, %d, %d)\n", process.type, process.id, process.cpuTime, process.ioBlockIn, process.cpuDone, blockFor);
 
           if (queues.get(process.type) == null) {
+            // Processes are sorted ascendingly by suspendedUntil so ready process is always end up
+            // in the head of the queue
             Comparator<SuspendedProcess> comp = (lhs, rhs) -> {return  Integer.compare(lhs.suspendedUntil, rhs.suspendedUntil);};
             queues.put(process.type, new PriorityQueue<>(comp));
           }
 
-          // Suspend process for some time since operation is blocking
+          // Register process in respective completion queue
           queues.get(process.type).add(new SuspendedProcess(blockFor + result.totalTime, process));
         }
       }
